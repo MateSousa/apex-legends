@@ -1,0 +1,666 @@
+/*
+================================================================================
+  Double Jump - Standalone Script for Cronus Zen
+  Game: Apex Legends
+  Author: Matheus Sousa
+  GPC Version: 2.0
+
+  Features:
+  - Double Jump on single button press
+  - Configurable jump delay (20-300ms)
+  - Full Apex Legends button layout support (7 layouts)
+  - OLED menu system with persistent settings (SPVAR)
+  - LED color feedback
+
+  Controls:
+  - LT + MENU/OPTIONS  : Open setup menu
+  - LT + VIEW/SELECT   : Toggle script OFF/ON
+  - D-pad LEFT/RIGHT   : Cycle menu items
+  - D-pad DOWN          : Toggle ON/OFF (on toggle screen)
+  - A / Cross           : Open sub-menu
+  - B / Circle          : Save & return
+================================================================================
+*/
+
+// ============================================================================
+//  Defines
+// ============================================================================
+
+define AMOUNT_OF_MENU_ITEMS = 3;
+define loadingTimer = 3000;
+define STATE_TRANSITION_TIMER = 100;
+
+// ============================================================================
+//  Button Mapping Variables
+// ============================================================================
+
+int FIRE_BTN,
+    ADS_BTN,
+    LETHAL_BTN,
+    TACTICAL_BTN,
+    JUMP_BTN,
+    CROUCH_BTN,
+    MELEE_BTN,
+    SPRINT_BTN,
+    RELOAD_BTN,
+    SWITCHWEAPON_BTN,
+    PING_BTN;
+
+// ============================================================================
+//  State Machine Variables
+// ============================================================================
+
+enum {
+    STATE_OFF,
+    STATE_LOADING,
+    STATE_PLAYING,
+    STATE_SETUP_MENU,
+    STATE_SETUP_SUBMENU,
+    STATE_SAVING,
+    STATE_CLEAN_SCREEN
+}
+
+int currentState = STATE_LOADING;
+int previousState;
+int tempState;
+int stateScreenDisplayed = FALSE;
+
+int loadingTime = 0;
+int stateTransitionTime = 0;
+
+// ============================================================================
+//  Toggle & Menu Variables
+// ============================================================================
+
+int toggleDoubleJump = FALSE;
+int menuItemId = 0;
+
+// ============================================================================
+//  Settings System
+// ============================================================================
+
+enum { DelayEnum=0, ButtonLayoutEnum }
+
+int settings[2];
+
+const int16 settingMinMax[][] = {
+    { 20, 300 },  // DelayEnum
+    {  0,   6 }   // ButtonLayoutEnum
+};
+
+const string SETTING_NAMES[] = { "DJ Delay (ms)", "Buttons Layout" };
+const string ONOFF[] = { "OFF", "ON" };
+const string BtnLayouts[] = { "Default", "Evolved", "Default Swapped", "Bumper Jumper", "Button Puncher", "Grenadier", "Ninja" };
+const string DSAVED = "SAVED";
+
+// ============================================================================
+//  Menu Item Names (OLED byte arrays)
+// ============================================================================
+
+const uint8 MODNAME[][] = {
+    { 32, 68, 79, 85, 66, 76, 69, 32, 74, 85, 77, 80, 32, 32, 0 },  // " DOUBLE JUMP  "
+    { 32, 32, 68, 74, 32, 68, 69, 76, 65, 89, 32, 32, 32, 32, 0 },   // "  DJ DELAY    "
+    { 32, 66, 84, 78, 32, 76, 65, 89, 79, 85, 84, 32, 32, 32, 0 }    // " BTN LAYOUT   "
+};
+
+// Menu item IDs
+enum { MenuDoubleJump=0, MenuDJDelay, MenuBtnLayout }
+
+// ============================================================================
+//  LED Colors
+// ============================================================================
+
+const int16 Color[][] = {
+    {  20,  50,  50 },  // White
+    {   0,   0,   0 },  // Black
+    {   0, 100, 100 },  // Red
+    { 240, 100,  93 },  // Blue
+    { 120, 100,  50 },  // Green
+    { 300, 100,  75 },  // Purple
+    {  20,  50,  30 }   // Pink
+};
+
+enum { Hue=0, Saturation, Brightness }
+enum { White=0, Black, Red, Blue, Green, Purple, Pink }
+
+int currentLedColor = Black;
+
+// ============================================================================
+//  Button Layouts Table (7 Apex Legends layouts)
+// ============================================================================
+
+const uint8 Layouts[][] = {
+//       Fire     ADS      Grenade   Jump     Crouch   Melee    Sprint   Reload   Swap     Ping     Tactical
+    { XB1_RT, XB1_LT, XB1_RIGHT, XB1_A,  XB1_B,  XB1_RS, XB1_LS, XB1_X, XB1_Y, XB1_RB, XB1_LB },  // 0 - Default
+    { XB1_RT, XB1_LT, XB1_RIGHT, XB1_LB, XB1_RS, XB1_B,  XB1_LS, XB1_X, XB1_Y, XB1_RB, XB1_A  },  // 1 - Evolved
+    { XB1_LT, XB1_RT, XB1_RB,    XB1_A,  XB1_B,  XB1_RS, XB1_LS, XB1_X, XB1_Y, XB1_RB, XB1_LB },  // 2 - Default Swapped
+    { XB1_RT, XB1_LT, XB1_RIGHT, XB1_LB, XB1_B,  XB1_RS, XB1_LS, XB1_X, XB1_Y, XB1_RB, XB1_A  },  // 3 - Bumper Jumper
+    { XB1_RT, XB1_LT, XB1_RIGHT, XB1_A,  XB1_RS, XB1_B,  XB1_LS, XB1_X, XB1_Y, XB1_RB, XB1_LB },  // 4 - Button Puncher
+    { XB1_RT, XB1_LT, XB1_RB,    XB1_A,  XB1_B,  XB1_RS, XB1_LS, XB1_X, XB1_Y, XB1_UP, XB1_LB },  // 5 - Grenadier
+    { XB1_RT, XB1_LT, XB1_RIGHT, XB1_LB, XB1_RB, XB1_RS, XB1_LS, XB1_X, XB1_Y, XB1_A,  XB1_B  }   // 6 - Ninja
+};
+
+function setButtonsLayout(Type) {
+    FIRE_BTN         = Layouts[Type][0];
+    ADS_BTN          = Layouts[Type][1];
+    LETHAL_BTN       = Layouts[Type][2];
+    JUMP_BTN         = Layouts[Type][3];
+    CROUCH_BTN       = Layouts[Type][4];
+    MELEE_BTN        = Layouts[Type][5];
+    SPRINT_BTN       = Layouts[Type][6];
+    RELOAD_BTN       = Layouts[Type][7];
+    SWITCHWEAPON_BTN = Layouts[Type][8];
+    PING_BTN         = Layouts[Type][9];
+    TACTICAL_BTN     = Layouts[Type][10];
+}
+
+// ============================================================================
+//  SPVAR Persistence
+// ============================================================================
+
+function saveSPVAR() {
+    set_pvar(SPVAR_1, toggleDoubleJump);
+    set_pvar(SPVAR_2, settings[DelayEnum]);
+    set_pvar(SPVAR_3, settings[ButtonLayoutEnum]);
+
+    previousState = currentState;
+    currentState = STATE_SAVING;
+}
+
+function loadSettingsSvar() {
+    toggleDoubleJump            = get_pvar(SPVAR_1, 0, 1, 0);
+    settings[DelayEnum]         = get_pvar(SPVAR_2, 20, 300, 80);
+    settings[ButtonLayoutEnum]  = get_pvar(SPVAR_3, 0, 6, 0);
+}
+
+// ============================================================================
+//  OLED Drawing Helpers
+// ============================================================================
+
+function centerX(f_chars, f_font) {
+    return (OLED_WIDTH / 2) - ((f_chars * f_font) / 2);
+}
+
+function centerY(f_size) {
+    return (OLED_HEIGHT / 2) - (f_size / 2);
+}
+
+function SetLEDColor(color) {
+    set_hsb(Color[color][Hue], Color[color][Saturation], Color[color][Brightness]);
+}
+
+int stringLength;
+function getStringLength(offset) {
+    stringLength = 0;
+    do {
+        offset++;
+        stringLength++;
+    } while (duint8(offset));
+    return stringLength;
+}
+
+function iif(expression, truepart, falsepart) {
+    if (expression) {
+        return truepart;
+    }
+    return falsepart;
+}
+
+function blinkLedAndRumble() {
+    set_ledx(3, 3);
+    resetBlinkLedAndRumble();
+}
+
+function resetBlinkLedAndRumble() {
+    if (!get_ledx()) {
+        SetLEDColor(currentLedColor);
+    }
+}
+
+function press_hold(f_btn) {
+    return event_press(f_btn) || (get_ival(f_btn) && get_ptime(f_btn) >= 500);
+}
+
+int range, filled_width, cursor_position;
+function drawProgressBarWithCursor(dpb_x, dpb_y, dpb_width, dpb_height, dpb_value, dpb_min_value, dpb_max_value) {
+    range = dpb_max_value - dpb_min_value;
+    filled_width = ((dpb_value - dpb_min_value) * dpb_width) / range;
+    cursor_position = dpb_x + filled_width;
+
+    rect_oled(dpb_x, dpb_y, dpb_width, dpb_height, 0, 0);
+
+    if (filled_width > 0) {
+        rect_oled(dpb_x, dpb_y, filled_width, dpb_height, 1, 0);
+    }
+    line_oled(cursor_position, dpb_y - 2, cursor_position, dpb_y + dpb_height + 2, 4, 0);
+}
+
+int dynamicArrowColor;
+function displayMiddleLine(arrowLeft, arrowRight, lineX, lineY, lineColor) {
+    dynamicArrowColor = !lineColor;
+    line_oled(lineX, lineY, 127, lineY, 15, lineColor);
+
+    if (arrowLeft) {
+        displayArrowLeft(5, lineY + 7, 50, dynamicArrowColor);
+    }
+    if (arrowRight) {
+        displayArrowRight(115, lineY + 7, 50, dynamicArrowColor);
+    }
+}
+
+int sizeArray;
+function displayArrowRight(dar_x, dar_y, dar_sizePercent, dar_color) {
+    sizeArray = (dar_sizePercent * 10) / 100;
+    line_oled(dar_x, dar_y, dar_x + sizeArray, dar_y, 1, dar_color);
+    line_oled(dar_x + sizeArray, dar_y, dar_x + sizeArray - (sizeArray / 2), dar_y - (sizeArray / 2), 1, dar_color);
+    line_oled(dar_x + sizeArray, dar_y, dar_x + sizeArray - (sizeArray / 2), dar_y + (sizeArray / 2), 1, dar_color);
+}
+
+function displayArrowLeft(dal_x, dal_y, dal_sizePercent, dal_color) {
+    sizeArray = (dal_sizePercent * 10) / 100;
+    line_oled(dal_x, dal_y, dal_x + sizeArray, dal_y, 1, dal_color);
+    line_oled(dal_x, dal_y, dal_x + (sizeArray / 2), dal_y - (sizeArray / 2), 1, dal_color);
+    line_oled(dal_x, dal_y, dal_x + (sizeArray / 2), dal_y + (sizeArray / 2), 1, dal_color);
+}
+
+int bufferIndex, digitIndex, charIndex;
+function numberToString(f_val, f_digits, fontSize, fontSizeWidth, xPosition, yPosition, color) {
+    bufferIndex = 1;
+    digitIndex = 10000;
+    if (f_val < 0) {
+        putc_oled(bufferIndex, 45);
+        bufferIndex += 1;
+        f_val = abs(f_val);
+    }
+    for (charIndex = 5; charIndex >= 1; charIndex--) {
+        if (f_digits >= charIndex) {
+            putc_oled(bufferIndex, (f_val / digitIndex) + 48);
+            f_val %= digitIndex;
+            bufferIndex++;
+        }
+        digitIndex /= 10;
+    }
+    puts_oled(iif(xPosition > 127, centerX(bufferIndex - 1, fontSizeWidth), xPosition), yPosition, fontSize, bufferIndex - 1, color);
+}
+
+int logVal;
+function findDigits(num) {
+    logVal = 0;
+    do {
+        num /= 10;
+        logVal++;
+    } while (num);
+    return logVal;
+}
+
+function resetDisplay() {
+    stateScreenDisplayed = FALSE;
+}
+
+function screenDisplayed() {
+    stateScreenDisplayed = TRUE;
+}
+
+// ============================================================================
+//  Init
+// ============================================================================
+
+init {
+    cls_oled(0);
+    currentLedColor = Pink;
+    SetLEDColor(currentLedColor);
+    loadSettingsSvar();
+    setButtonsLayout(settings[ButtonLayoutEnum]);
+}
+
+// ============================================================================
+//  Main (State Machine)
+// ============================================================================
+
+main {
+    switch (currentState) {
+        case STATE_OFF: {
+            handleOffState();
+            break;
+        }
+        case STATE_LOADING: {
+            handleLoadingState();
+            break;
+        }
+        case STATE_PLAYING: {
+            handlePlayingState();
+            break;
+        }
+        case STATE_SETUP_MENU: {
+            handleSetupMenuState();
+            break;
+        }
+        case STATE_SETUP_SUBMENU: {
+            handleSubMenuState();
+            break;
+        }
+        case STATE_SAVING: {
+            handleSavingState();
+            break;
+        }
+        case STATE_CLEAN_SCREEN: {
+            handleCleanScreenState();
+            break;
+        }
+    }
+    set_val(TRACE_1, currentState);
+}
+
+// ============================================================================
+//  State Handlers
+// ============================================================================
+
+// --- OFF State ---
+function handleOffState() {
+    combo_stop_all();
+    combo_run(DisplayDesactivated);
+    handleUserOffStateInput();
+}
+
+function handleUserOffStateInput() {
+    if (get_val(XB1_LT) && event_release(XB1_VIEW)) {
+        combo_stop(DisplayDesactivated);
+        tempState = STATE_PLAYING;
+        currentState = STATE_CLEAN_SCREEN;
+    }
+}
+
+// --- LOADING State ---
+const uint8 introName[] = { 68, 111, 117, 98, 108, 101, 32, 74, 117, 109, 112, 0 };  // "Double Jump"
+const uint8 introVer[]  = { 118, 49, 46, 48, 0 };                                      // "v1.0"
+
+function handleLoadingState() {
+    if (loadingTime >= loadingTimer) {
+        combo_stop(ComboDisplayIntro);
+        cls_oled(OLED_BLACK);
+        currentState = STATE_PLAYING;
+    } else {
+        loadingTime += get_rtime();
+        combo_run(ComboDisplayIntro);
+    }
+}
+
+// --- CLEAN SCREEN State ---
+function handleCleanScreenState() {
+    if (tempState == STATE_OFF) {
+        cls_oled(OLED_BLACK);
+    } else if (tempState == STATE_SETUP_MENU) {
+        cls_oled(OLED_WHITE);
+    } else {
+        cls_oled(OLED_WHITE);
+    }
+
+    if (stateTransitionTime > STATE_TRANSITION_TIMER) {
+        currentState = tempState;
+        previousState = currentState;
+        stateTransitionTime = 0;
+        resetDisplay();
+    } else {
+        stateTransitionTime += get_rtime();
+    }
+}
+
+// --- SAVING State ---
+function handleSavingState() {
+    combo_run(Save);
+    tempState = STATE_PLAYING;
+    currentState = STATE_CLEAN_SCREEN;
+}
+
+// --- PLAYING State ---
+function handlePlayingState() {
+    previousState = currentState;
+    resetBlinkLedAndRumble();
+    displayPlayingScreen();
+    handleUserPlayingInput();
+
+    // Double Jump trigger
+    if (toggleDoubleJump && event_press(JUMP_BTN)) {
+        combo_run(DoubleJump);
+    }
+}
+
+function displayPlayingScreen() {
+    if (stateScreenDisplayed == FALSE) {
+        cls_oled(OLED_WHITE);
+        line_oled(0, 35, 127, 35, 2, 0);
+
+        // Title
+        print(centerX(getStringLength(addr(MODNAME[MenuDoubleJump])), OLED_FONT_SMALL_WIDTH),
+              10, OLED_FONT_SMALL, OLED_BLACK, addr(MODNAME[MenuDoubleJump]));
+
+        // ON/OFF status
+        print(centerX(getStringLength(ONOFF[toggleDoubleJump]), OLED_FONT_LARGE_WIDTH),
+              40, OLED_FONT_LARGE, OLED_BLACK, ONOFF[toggleDoubleJump]);
+
+        screenDisplayed();
+    }
+}
+
+function handleUserPlayingInput() {
+    // LT + VIEW = Toggle script OFF
+    if (get_val(XB1_LT) && event_release(XB1_VIEW)) {
+        block_all_inputs();
+        tempState = STATE_OFF;
+        currentState = STATE_CLEAN_SCREEN;
+    }
+
+    // Suppress MENU while LT held (prevent in-game menu)
+    if (get_val(XB1_LT) && get_val(XB1_MENU)) {
+        set_val(XB1_MENU, 0);
+        set_val(XB1_LT, 0);
+    }
+
+    // LT + MENU = Open setup menu
+    if (get_val(XB1_LT) && event_release(XB1_MENU)) {
+        block_all_inputs();
+        tempState = STATE_SETUP_MENU;
+        currentState = STATE_CLEAN_SCREEN;
+    }
+}
+
+// --- SETUP MENU State ---
+function handleSetupMenuState() {
+    previousState = currentState;
+    combo_stop_all();
+    block_all_inputs();
+    resetBlinkLedAndRumble();
+
+    displayMenuScreen();
+
+    // D-pad DOWN: toggle on the "DOUBLE JUMP" item
+    if (event_press(XB1_DOWN) && menuItemId == MenuDoubleJump) {
+        toggleDoubleJump = !toggleDoubleJump;
+        blinkLedAndRumble();
+        resetDisplay();
+    }
+
+    // A: open sub-menu (only for delay and layout items)
+    if (event_press(XB1_A) && menuItemId != MenuDoubleJump) {
+        currentState = STATE_SETUP_SUBMENU;
+        resetDisplay();
+    }
+
+    // B: save & return to gameplay
+    if (event_press(XB1_B)) {
+        blinkLedAndRumble();
+        saveSPVAR();
+    }
+
+    // D-pad RIGHT: next menu item
+    if (event_press(XB1_RIGHT)) {
+        menuItemId += 1;
+        if (menuItemId > AMOUNT_OF_MENU_ITEMS - 1) {
+            menuItemId = 0;
+        }
+        resetDisplay();
+    }
+
+    // D-pad LEFT: previous menu item
+    if (event_press(XB1_LEFT)) {
+        menuItemId -= 1;
+        if (menuItemId < 0) {
+            menuItemId = AMOUNT_OF_MENU_ITEMS - 1;
+        }
+        resetDisplay();
+    }
+}
+
+function displayMenuScreen() {
+    if (stateScreenDisplayed == FALSE) {
+        cls_oled(OLED_WHITE);
+
+        // Top navigation line with arrows
+        displayMiddleLine(TRUE, TRUE, 0, 0, OLED_BLACK);
+
+        // Mod name
+        print(centerX(getStringLength(addr(MODNAME[menuItemId])), OLED_FONT_SMALL_WIDTH),
+              5, OLED_FONT_SMALL, OLED_WHITE, addr(MODNAME[menuItemId]));
+
+        line_oled(0, 20, 127, 20, 1, OLED_BLACK);
+
+        if (menuItemId == MenuDoubleJump) {
+            // Show ON/OFF toggle
+            print(centerX(getStringLength(ONOFF[toggleDoubleJump]), OLED_FONT_LARGE_WIDTH),
+                  38, OLED_FONT_LARGE, OLED_BLACK, ONOFF[toggleDoubleJump]);
+        } else if (menuItemId == MenuDJDelay) {
+            // Show current delay value
+            print(centerX(getStringLength(SETTING_NAMES[DelayEnum]), OLED_FONT_SMALL_WIDTH),
+                  25, OLED_FONT_SMALL, OLED_BLACK, SETTING_NAMES[DelayEnum]);
+            numberToString(settings[DelayEnum], findDigits(settings[DelayEnum]),
+                           OLED_FONT_SMALL, OLED_FONT_SMALL_WIDTH,
+                           centerX(findDigits(settings[DelayEnum]), OLED_FONT_SMALL_WIDTH),
+                           45, OLED_BLACK);
+        } else if (menuItemId == MenuBtnLayout) {
+            // Show current layout name
+            print(centerX(getStringLength(SETTING_NAMES[ButtonLayoutEnum]), OLED_FONT_SMALL_WIDTH),
+                  25, OLED_FONT_SMALL, OLED_BLACK, SETTING_NAMES[ButtonLayoutEnum]);
+            print(centerX(getStringLength(BtnLayouts[settings[ButtonLayoutEnum]]), OLED_FONT_SMALL_WIDTH),
+                  45, OLED_FONT_SMALL, OLED_BLACK, BtnLayouts[settings[ButtonLayoutEnum]]);
+        }
+
+        screenDisplayed();
+    }
+}
+
+// --- SUB-MENU State ---
+int currentSubSetting;
+
+function handleSubMenuState() {
+    previousState = currentState;
+    block_all_inputs();
+
+    // Determine which setting we're editing
+    if (menuItemId == MenuDJDelay) {
+        currentSubSetting = DelayEnum;
+    } else {
+        currentSubSetting = ButtonLayoutEnum;
+    }
+
+    displaySubMenuScreen();
+
+    // D-pad RIGHT: increase value
+    if (press_hold(XB1_RIGHT)) {
+        settings[currentSubSetting] += 1;
+        if (settings[currentSubSetting] > settingMinMax[currentSubSetting][1]) {
+            settings[currentSubSetting] = settingMinMax[currentSubSetting][1];
+        }
+        if (currentSubSetting == ButtonLayoutEnum) {
+            setButtonsLayout(settings[ButtonLayoutEnum]);
+        }
+        resetDisplay();
+    }
+
+    // D-pad LEFT: decrease value
+    if (press_hold(XB1_LEFT)) {
+        settings[currentSubSetting] -= 1;
+        if (settings[currentSubSetting] < settingMinMax[currentSubSetting][0]) {
+            settings[currentSubSetting] = settingMinMax[currentSubSetting][0];
+        }
+        if (currentSubSetting == ButtonLayoutEnum) {
+            setButtonsLayout(settings[ButtonLayoutEnum]);
+        }
+        resetDisplay();
+    }
+
+    // B: return to main menu
+    if (event_press(XB1_B)) {
+        tempState = STATE_SETUP_MENU;
+        currentState = STATE_CLEAN_SCREEN;
+    }
+}
+
+function displaySubMenuScreen() {
+    if (stateScreenDisplayed == FALSE) {
+        cls_oled(OLED_WHITE);
+
+        // Title
+        print(centerX(getStringLength(addr(MODNAME[menuItemId])), OLED_FONT_SMALL_WIDTH),
+              5, OLED_FONT_SMALL, OLED_BLACK, addr(MODNAME[menuItemId]));
+        line_oled(0, 20, 127, 20, 2, OLED_BLACK);
+
+        // Setting label
+        print(centerX(getStringLength(SETTING_NAMES[currentSubSetting]), OLED_FONT_SMALL_WIDTH),
+              25, OLED_FONT_SMALL, OLED_BLACK, SETTING_NAMES[currentSubSetting]);
+
+        // Navigation arrows
+        displayArrowLeft(5, 45, 50, OLED_BLACK);
+        displayArrowRight(115, 45, 50, OLED_BLACK);
+
+        if (currentSubSetting == DelayEnum) {
+            // Show progress bar + numeric value for delay
+            drawProgressBarWithCursor(10, 40, 108, 6,
+                                      settings[DelayEnum],
+                                      settingMinMax[DelayEnum][0],
+                                      settingMinMax[DelayEnum][1]);
+            numberToString(settings[DelayEnum], findDigits(settings[DelayEnum]),
+                           OLED_FONT_SMALL, OLED_FONT_SMALL_WIDTH,
+                           cursor_position - 2, 55, OLED_BLACK);
+        } else {
+            // Show layout name for button layout
+            print(centerX(getStringLength(BtnLayouts[settings[ButtonLayoutEnum]]), OLED_FONT_SMALL_WIDTH),
+                  42, OLED_FONT_SMALL, OLED_BLACK, BtnLayouts[settings[ButtonLayoutEnum]]);
+        }
+
+        screenDisplayed();
+    }
+}
+
+// ============================================================================
+//  Combos
+// ============================================================================
+
+fcombo DoubleJump {
+    wait(settings[DelayEnum]);
+    set_val(JUMP_BTN, 100);
+    wait(50);
+    set_val(JUMP_BTN, 0);
+}
+
+fcombo Save {
+    cls_oled(0);
+    print(centerX(sizeof(DSAVED) - 1, OLED_FONT_LARGE_WIDTH),
+          centerY(OLED_FONT_LARGE_HEIGHT),
+          OLED_FONT_LARGE, OLED_WHITE, DSAVED[0]);
+    wait(1500);
+    resetDisplay();
+}
+
+fcombo ComboDisplayIntro {
+    cls_oled(0);
+    print(centerX(sizeof(introName) - 1, OLED_FONT_SMALL_WIDTH), 25, OLED_FONT_SMALL, OLED_WHITE, addr(introName));
+    print(50, 40, OLED_FONT_SMALL, OLED_WHITE, addr(introVer));
+    wait(100);
+}
+
+fcombo DisplayDesactivated {
+    currentLedColor = Black;
+    SetLEDColor(currentLedColor);
+    print(centerX(getStringLength(ONOFF[0]), OLED_FONT_LARGE_WIDTH), 15, OLED_FONT_LARGE, OLED_WHITE, ONOFF[0]);
+    wait(2000);
+}
