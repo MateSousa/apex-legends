@@ -8,7 +8,7 @@
   Features:
   - Double Jump on single button press
   - Configurable jump delay (20-300ms)
-  - Full Apex Legends button layout support (7 layouts)
+  - Configurable jump button
   - OLED menu system with persistent settings (SPVAR)
   - LED color feedback
 
@@ -34,17 +34,7 @@ define STATE_TRANSITION_TIMER = 100;
 //  Button Mapping Variables
 // ============================================================================
 
-int FIRE_BTN,
-    ADS_BTN,
-    LETHAL_BTN,
-    TACTICAL_BTN,
-    JUMP_BTN,
-    CROUCH_BTN,
-    MELEE_BTN,
-    SPRINT_BTN,
-    RELOAD_BTN,
-    SWITCHWEAPON_BTN,
-    PING_BTN;
+int JUMP_BTN;
 
 // ============================================================================
 //  State Machine Variables
@@ -79,18 +69,19 @@ int menuItemId = 0;
 //  Settings System
 // ============================================================================
 
-enum { DelayEnum=0, ButtonLayoutEnum }
+enum { DelayEnum=0, JumpButtonEnum }
 
 int settings[2];
 
 const int16 settingMinMax[][] = {
     { 20, 300 },  // DelayEnum
-    {  0,   6 }   // ButtonLayoutEnum
+    {  0,   9 }   // JumpButtonEnum
 };
 
-const string SETTING_NAMES[] = { "DJ Delay (ms)", "Buttons Layout" };
+const string SETTING_NAMES[] = { "DJ Delay (ms)", "Jump Button" };
 const string ONOFF[] = { "OFF", "ON" };
-const string BtnLayouts[] = { "Default", "Evolved", "Default Swapped", "Bumper Jumper", "Button Puncher", "Grenadier", "Ninja" };
+const string JumpButtons[] = { "A", "B", "X", "Y", "LB", "RB", "LT", "RT", "L3", "R3" };
+const uint8 JumpButtonIds[] = { XB1_A, XB1_B, XB1_X, XB1_Y, XB1_LB, XB1_RB, XB1_LT, XB1_RT, XB1_LS, XB1_RS };
 const string DSAVED = "SAVED";
 
 // ============================================================================
@@ -100,7 +91,7 @@ const string DSAVED = "SAVED";
 const uint8 MODNAME[][] = {
     { 32, 68, 79, 85, 66, 76, 69, 32, 74, 85, 77, 80, 32, 32, 0 },  // " DOUBLE JUMP  "
     { 32, 32, 68, 74, 32, 68, 69, 76, 65, 89, 32, 32, 32, 32, 0 },   // "  DJ DELAY    "
-    { 32, 66, 84, 78, 32, 76, 65, 89, 79, 85, 84, 32, 32, 32, 0 }    // " BTN LAYOUT   "
+    { 32, 74, 85, 77, 80, 32, 66, 85, 84, 84, 79, 78, 32, 32, 0 }    // " JUMP BUTTON  "
 };
 
 // Menu item IDs
@@ -126,42 +117,13 @@ enum { White=0, Black, Red, Blue, Green, Purple, Pink }
 int currentLedColor = Black;
 
 // ============================================================================
-//  Button Layouts Table (7 Apex Legends layouts)
-// ============================================================================
-
-const uint8 Layouts[][] = {
-//       Fire     ADS      Grenade   Jump     Crouch   Melee    Sprint   Reload   Swap     Ping     Tactical
-    { XB1_RT, XB1_LT, XB1_RIGHT, XB1_A,  XB1_B,  XB1_RS, XB1_LS, XB1_X, XB1_Y, XB1_RB, XB1_LB },  // 0 - Default
-    { XB1_RT, XB1_LT, XB1_RIGHT, XB1_LB, XB1_RS, XB1_B,  XB1_LS, XB1_X, XB1_Y, XB1_RB, XB1_A  },  // 1 - Evolved
-    { XB1_LT, XB1_RT, XB1_RB,    XB1_A,  XB1_B,  XB1_RS, XB1_LS, XB1_X, XB1_Y, XB1_RB, XB1_LB },  // 2 - Default Swapped
-    { XB1_RT, XB1_LT, XB1_RIGHT, XB1_LB, XB1_B,  XB1_RS, XB1_LS, XB1_X, XB1_Y, XB1_RB, XB1_A  },  // 3 - Bumper Jumper
-    { XB1_RT, XB1_LT, XB1_RIGHT, XB1_A,  XB1_RS, XB1_B,  XB1_LS, XB1_X, XB1_Y, XB1_RB, XB1_LB },  // 4 - Button Puncher
-    { XB1_RT, XB1_LT, XB1_RB,    XB1_A,  XB1_B,  XB1_RS, XB1_LS, XB1_X, XB1_Y, XB1_UP, XB1_LB },  // 5 - Grenadier
-    { XB1_RT, XB1_LT, XB1_RIGHT, XB1_LB, XB1_RB, XB1_RS, XB1_LS, XB1_X, XB1_Y, XB1_A,  XB1_B  }   // 6 - Ninja
-};
-
-function setButtonsLayout(Type) {
-    FIRE_BTN         = Layouts[Type][0];
-    ADS_BTN          = Layouts[Type][1];
-    LETHAL_BTN       = Layouts[Type][2];
-    JUMP_BTN         = Layouts[Type][3];
-    CROUCH_BTN       = Layouts[Type][4];
-    MELEE_BTN        = Layouts[Type][5];
-    SPRINT_BTN       = Layouts[Type][6];
-    RELOAD_BTN       = Layouts[Type][7];
-    SWITCHWEAPON_BTN = Layouts[Type][8];
-    PING_BTN         = Layouts[Type][9];
-    TACTICAL_BTN     = Layouts[Type][10];
-}
-
-// ============================================================================
 //  SPVAR Persistence
 // ============================================================================
 
 function saveSPVAR() {
     set_pvar(SPVAR_1, toggleDoubleJump);
     set_pvar(SPVAR_2, settings[DelayEnum]);
-    set_pvar(SPVAR_3, settings[ButtonLayoutEnum]);
+    set_pvar(SPVAR_3, settings[JumpButtonEnum]);
 
     previousState = currentState;
     currentState = STATE_SAVING;
@@ -170,7 +132,8 @@ function saveSPVAR() {
 function loadSettingsSvar() {
     toggleDoubleJump            = get_pvar(SPVAR_1, 0, 1, 0);
     settings[DelayEnum]         = get_pvar(SPVAR_2, 20, 300, 80);
-    settings[ButtonLayoutEnum]  = get_pvar(SPVAR_3, 0, 6, 0);
+    settings[JumpButtonEnum]    = get_pvar(SPVAR_3, 0, 9, 0);
+    JUMP_BTN = JumpButtonIds[settings[JumpButtonEnum]];
 }
 
 // ============================================================================
@@ -310,7 +273,6 @@ init {
     currentLedColor = Pink;
     SetLEDColor(currentLedColor);
     loadSettingsSvar();
-    setButtonsLayout(settings[ButtonLayoutEnum]);
 }
 
 // ============================================================================
@@ -537,11 +499,11 @@ function displayMenuScreen() {
                            centerX(findDigits(settings[DelayEnum]), OLED_FONT_SMALL_WIDTH),
                            45, OLED_BLACK);
         } else if (menuItemId == MenuBtnLayout) {
-            // Show current layout name
-            print(centerX(getStringLength(SETTING_NAMES[ButtonLayoutEnum]), OLED_FONT_SMALL_WIDTH),
-                  25, OLED_FONT_SMALL, OLED_BLACK, SETTING_NAMES[ButtonLayoutEnum]);
-            print(centerX(getStringLength(BtnLayouts[settings[ButtonLayoutEnum]]), OLED_FONT_SMALL_WIDTH),
-                  45, OLED_FONT_SMALL, OLED_BLACK, BtnLayouts[settings[ButtonLayoutEnum]]);
+            // Show current jump button
+            print(centerX(getStringLength(SETTING_NAMES[JumpButtonEnum]), OLED_FONT_SMALL_WIDTH),
+                  25, OLED_FONT_SMALL, OLED_BLACK, SETTING_NAMES[JumpButtonEnum]);
+            print(centerX(getStringLength(JumpButtons[settings[JumpButtonEnum]]), OLED_FONT_SMALL_WIDTH),
+                  45, OLED_FONT_SMALL, OLED_BLACK, JumpButtons[settings[JumpButtonEnum]]);
         }
 
         screenDisplayed();
@@ -559,7 +521,7 @@ function handleSubMenuState() {
     if (menuItemId == MenuDJDelay) {
         currentSubSetting = DelayEnum;
     } else {
-        currentSubSetting = ButtonLayoutEnum;
+        currentSubSetting = JumpButtonEnum;
     }
 
     displaySubMenuScreen();
@@ -570,8 +532,8 @@ function handleSubMenuState() {
         if (settings[currentSubSetting] > settingMinMax[currentSubSetting][1]) {
             settings[currentSubSetting] = settingMinMax[currentSubSetting][1];
         }
-        if (currentSubSetting == ButtonLayoutEnum) {
-            setButtonsLayout(settings[ButtonLayoutEnum]);
+        if (currentSubSetting == JumpButtonEnum) {
+            JUMP_BTN = JumpButtonIds[settings[JumpButtonEnum]];
         }
         resetDisplay();
     }
@@ -582,8 +544,8 @@ function handleSubMenuState() {
         if (settings[currentSubSetting] < settingMinMax[currentSubSetting][0]) {
             settings[currentSubSetting] = settingMinMax[currentSubSetting][0];
         }
-        if (currentSubSetting == ButtonLayoutEnum) {
-            setButtonsLayout(settings[ButtonLayoutEnum]);
+        if (currentSubSetting == JumpButtonEnum) {
+            JUMP_BTN = JumpButtonIds[settings[JumpButtonEnum]];
         }
         resetDisplay();
     }
@@ -622,9 +584,9 @@ function displaySubMenuScreen() {
                            OLED_FONT_SMALL, OLED_FONT_SMALL_WIDTH,
                            cursor_position - 2, 55, OLED_BLACK);
         } else {
-            // Show layout name for button layout
-            print(centerX(getStringLength(BtnLayouts[settings[ButtonLayoutEnum]]), OLED_FONT_SMALL_WIDTH),
-                  42, OLED_FONT_SMALL, OLED_BLACK, BtnLayouts[settings[ButtonLayoutEnum]]);
+            // Show jump button name
+            print(centerX(getStringLength(JumpButtons[settings[JumpButtonEnum]]), OLED_FONT_SMALL_WIDTH),
+                  42, OLED_FONT_SMALL, OLED_BLACK, JumpButtons[settings[JumpButtonEnum]]);
         }
 
         screenDisplayed();
