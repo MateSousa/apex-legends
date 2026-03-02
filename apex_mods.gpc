@@ -1,16 +1,17 @@
 /*
 ================================================================================
-  Double Jump - Standalone Script for Cronus Zen
+  Apex Mods - Multi-Feature Script for Cronus Zen
   Game: Apex Legends
   Author: Matheus Sousa
   GPC Version: 2.0
 
   Features:
   - Double Jump on single button press
+  - Weapon Detection via rumble pulse timing
   - Configurable jump delay (20-300ms)
   - Configurable jump button
   - OLED menu system with persistent settings (SPVAR)
-  - LED color feedback
+  - LED color feedback per weapon band
 
   Controls:
   - LT + MENU/OPTIONS  : Open setup menu
@@ -26,9 +27,14 @@
 //  Defines
 // ============================================================================
 
-define AMOUNT_OF_MENU_ITEMS = 3;
+define AMOUNT_OF_MENU_ITEMS = 4;
 define loadingTimer = 3000;
 define STATE_TRANSITION_TIMER = 100;
+
+// Weapon Detection
+define RUMBLE_THRESHOLD = 10;
+define SAMPLES_NEEDED = 5;
+define DETECTION_RESET_TIMEOUT = 2000;
 
 // ============================================================================
 //  Button Mapping Variables
@@ -63,6 +69,7 @@ int stateTransitionTime = 0;
 // ============================================================================
 
 int toggleDoubleJump = FALSE;
+int toggleWeaponDetection = FALSE;
 int menuItemId = 0;
 
 // ============================================================================
@@ -85,17 +92,36 @@ const uint8 JumpButtonIds[] = { XB1_A, XB1_B, XB1_X, XB1_Y, XB1_LB, XB1_RB, XB1_
 const string DSAVED = "SAVED";
 
 // ============================================================================
+//  Weapon Detection Variables
+// ============================================================================
+
+int rumbleWasActive = FALSE;
+int timeSinceLastPulse = 0;
+int hasPreviousPulse = FALSE;
+int sampleCount = 0;
+int totalInterval = 0;
+int avgInterval = 0;
+int detectedWeapon = 0;
+int prevDetectedWeapon = 0;
+
+const string WeaponNames[] = {
+    "Unknown", "R99/CAR/Devo", "R301/RE45",
+    "Flat/Volt/Alt", "Spit/Prowl", "Ramp/G7", "Semi/Sniper"
+};
+
+// ============================================================================
 //  Menu Item Names (OLED byte arrays)
 // ============================================================================
 
 const uint8 MODNAME[][] = {
     { 32, 68, 79, 85, 66, 76, 69, 32, 74, 85, 77, 80, 32, 32, 0 },  // " DOUBLE JUMP  "
     { 32, 32, 68, 74, 32, 68, 69, 76, 65, 89, 32, 32, 32, 32, 0 },   // "  DJ DELAY    "
-    { 32, 74, 85, 77, 80, 32, 66, 85, 84, 84, 79, 78, 32, 32, 0 }    // " JUMP BUTTON  "
+    { 32, 74, 85, 77, 80, 32, 66, 85, 84, 84, 79, 78, 32, 32, 0 },   // " JUMP BUTTON  "
+    { 32, 87, 69, 65, 80, 79, 78, 32, 68, 69, 84, 69, 67, 84, 0 }    // " WEAPON DETECT"
 };
 
 // Menu item IDs
-enum { MenuDoubleJump=0, MenuDJDelay, MenuBtnLayout }
+enum { MenuDoubleJump=0, MenuDJDelay, MenuBtnLayout, MenuWeaponDetect }
 
 // ============================================================================
 //  LED Colors
@@ -124,6 +150,7 @@ function saveSPVAR() {
     set_pvar(SPVAR_1, toggleDoubleJump);
     set_pvar(SPVAR_2, settings[DelayEnum]);
     set_pvar(SPVAR_3, settings[JumpButtonEnum]);
+    set_pvar(SPVAR_4, toggleWeaponDetection);
 
     previousState = currentState;
     currentState = STATE_SAVING;
@@ -133,6 +160,7 @@ function loadSettingsSvar() {
     toggleDoubleJump            = get_pvar(SPVAR_1, 0, 1, 0);
     settings[DelayEnum]         = get_pvar(SPVAR_2, 20, 300, 80);
     settings[JumpButtonEnum]    = get_pvar(SPVAR_3, 0, 9, 0);
+    toggleWeaponDetection       = get_pvar(SPVAR_4, 0, 1, 0);
     JUMP_BTN = JumpButtonIds[settings[JumpButtonEnum]];
 }
 
@@ -265,6 +293,30 @@ function screenDisplayed() {
 }
 
 // ============================================================================
+//  Weapon Detection
+// ============================================================================
+
+function identifyWeapon(ms) {
+    if (ms < 70) return 1;      // R-99, CAR, Devotion (45-70ms)
+    if (ms < 82) return 2;      // R-301, RE-45 (70-82ms)
+    if (ms < 105) return 3;     // Flatline, Volt, Alternator (82-105ms)
+    if (ms < 160) return 4;     // Spitfire, Prowler (105-160ms)
+    if (ms < 260) return 5;     // Rampage, G7 (160-260ms)
+    return 6;                    // Semi/Sniper (260ms+)
+}
+
+function setWeaponLedColor(weapon) {
+    if (weapon == 1) currentLedColor = Red;
+    else if (weapon == 2) currentLedColor = Blue;
+    else if (weapon == 3) currentLedColor = Green;
+    else if (weapon == 4) currentLedColor = Purple;
+    else if (weapon == 5) currentLedColor = White;
+    else if (weapon == 6) currentLedColor = Pink;
+    else currentLedColor = Pink;
+    SetLEDColor(currentLedColor);
+}
+
+// ============================================================================
 //  Init
 // ============================================================================
 
@@ -311,9 +363,9 @@ main {
         }
     }
     set_val(TRACE_1, currentState);
-    set_val(TRACE_2, JUMP_BTN);
-    set_val(TRACE_3, settings[JumpButtonEnum]);
-    set_val(TRACE_4, toggleDoubleJump);
+    set_val(TRACE_2, detectedWeapon);
+    set_val(TRACE_3, avgInterval);
+    set_val(TRACE_4, get_rumble(RUMBLE_RT));
 }
 
 // ============================================================================
@@ -336,8 +388,8 @@ function handleUserOffStateInput() {
 }
 
 // --- LOADING State ---
-const uint8 introName[] = { 68, 111, 117, 98, 108, 101, 32, 74, 117, 109, 112, 0 };  // "Double Jump"
-const uint8 introVer[]  = { 118, 49, 46, 48, 0 };                                      // "v1.0"
+const uint8 introName[] = { 65, 112, 101, 120, 32, 77, 111, 100, 115, 0 };  // "Apex Mods"
+const uint8 introVer[]  = { 118, 50, 46, 48, 0 };                             // "v2.0"
 
 function handleLoadingState() {
     if (loadingTime >= loadingTimer) {
@@ -388,20 +440,79 @@ function handlePlayingState() {
     if (toggleDoubleJump && event_press(JUMP_BTN)) {
         combo_run(DoubleJump);
     }
+
+    // Weapon Detection
+    if (toggleWeaponDetection) {
+        timeSinceLastPulse += get_rtime();
+
+        if (get_rumble(RUMBLE_RT) > RUMBLE_THRESHOLD) {
+            if (!rumbleWasActive) {
+                // Rising edge detected
+                rumbleWasActive = TRUE;
+
+                if (hasPreviousPulse) {
+                    totalInterval += timeSinceLastPulse;
+                    sampleCount += 1;
+
+                    if (sampleCount >= SAMPLES_NEEDED) {
+                        avgInterval = totalInterval / sampleCount;
+                        prevDetectedWeapon = detectedWeapon;
+                        detectedWeapon = identifyWeapon(avgInterval);
+
+                        if (detectedWeapon != prevDetectedWeapon) {
+                            setWeaponLedColor(detectedWeapon);
+                            resetDisplay();
+                        }
+
+                        // Reset for next batch
+                        sampleCount = 0;
+                        totalInterval = 0;
+                    }
+                }
+
+                hasPreviousPulse = TRUE;
+                timeSinceLastPulse = 0;
+            }
+        } else {
+            rumbleWasActive = FALSE;
+        }
+
+        // Reset after timeout (stopped firing)
+        if (timeSinceLastPulse > DETECTION_RESET_TIMEOUT) {
+            if (detectedWeapon != 0) {
+                detectedWeapon = 0;
+                hasPreviousPulse = FALSE;
+                sampleCount = 0;
+                totalInterval = 0;
+                avgInterval = 0;
+                currentLedColor = Pink;
+                SetLEDColor(currentLedColor);
+                resetDisplay();
+            }
+        }
+    }
 }
 
 function displayPlayingScreen() {
     if (stateScreenDisplayed == FALSE) {
         cls_oled(OLED_WHITE);
-        line_oled(0, 35, 127, 35, 2, 0);
 
         // Title
         print(centerX(getStringLength(addr(MODNAME[MenuDoubleJump])), OLED_FONT_SMALL_WIDTH),
-              10, OLED_FONT_SMALL, OLED_BLACK, addr(MODNAME[MenuDoubleJump]));
+              5, OLED_FONT_SMALL, OLED_BLACK, addr(MODNAME[MenuDoubleJump]));
 
         // ON/OFF status
         print(centerX(getStringLength(ONOFF[toggleDoubleJump]), OLED_FONT_LARGE_WIDTH),
-              40, OLED_FONT_LARGE, OLED_BLACK, ONOFF[toggleDoubleJump]);
+              18, OLED_FONT_LARGE, OLED_BLACK, ONOFF[toggleDoubleJump]);
+
+        if (toggleWeaponDetection) {
+            // Divider
+            line_oled(0, 38, 127, 38, 1, 0);
+
+            // Detected weapon name
+            print(centerX(getStringLength(WeaponNames[detectedWeapon]), OLED_FONT_SMALL_WIDTH),
+                  45, OLED_FONT_SMALL, OLED_BLACK, WeaponNames[detectedWeapon]);
+        }
 
         screenDisplayed();
     }
@@ -438,15 +549,22 @@ function handleSetupMenuState() {
 
     displayMenuScreen();
 
-    // D-pad DOWN: toggle on the "DOUBLE JUMP" item
+    // D-pad DOWN: toggle on "DOUBLE JUMP" item
     if (event_press(XB1_DOWN) && menuItemId == MenuDoubleJump) {
         toggleDoubleJump = !toggleDoubleJump;
         blinkLedAndRumble();
         resetDisplay();
     }
 
+    // D-pad DOWN: toggle on "WEAPON DETECT" item
+    if (event_press(XB1_DOWN) && menuItemId == MenuWeaponDetect) {
+        toggleWeaponDetection = !toggleWeaponDetection;
+        blinkLedAndRumble();
+        resetDisplay();
+    }
+
     // A: open sub-menu (only for delay and layout items)
-    if (event_press(XB1_A) && menuItemId != MenuDoubleJump) {
+    if (event_press(XB1_A) && menuItemId != MenuDoubleJump && menuItemId != MenuWeaponDetect) {
         currentState = STATE_SETUP_SUBMENU;
         resetDisplay();
     }
@@ -507,6 +625,10 @@ function displayMenuScreen() {
                   25, OLED_FONT_SMALL, OLED_BLACK, SETTING_NAMES[JumpButtonEnum]);
             print(centerX(getStringLength(JumpButtons[settings[JumpButtonEnum]]), OLED_FONT_SMALL_WIDTH),
                   45, OLED_FONT_SMALL, OLED_BLACK, JumpButtons[settings[JumpButtonEnum]]);
+        } else if (menuItemId == MenuWeaponDetect) {
+            // Show ON/OFF toggle for weapon detection
+            print(centerX(getStringLength(ONOFF[toggleWeaponDetection]), OLED_FONT_LARGE_WIDTH),
+                  38, OLED_FONT_LARGE, OLED_BLACK, ONOFF[toggleWeaponDetection]);
         }
 
         screenDisplayed();
