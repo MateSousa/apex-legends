@@ -33,6 +33,7 @@ define STATE_TRANSITION_TIMER = 100;
 
 // Weapon Detection
 define RUMBLE_THRESHOLD = 10;
+define RUMBLE_CHANGE_MIN = 5;
 define SAMPLES_NEEDED = 5;
 define DETECTION_RESET_TIMEOUT = 2000;
 
@@ -95,7 +96,9 @@ const string DSAVED = "SAVED";
 //  Weapon Detection Variables
 // ============================================================================
 
-int rumbleWasActive = FALSE;
+int rumbleFalling = FALSE;
+int currentRumble = 0;
+int prevRumble = 0;
 int timeSinceLastPulse = 0;
 int hasPreviousPulse = FALSE;
 int sampleCount = 0;
@@ -364,7 +367,7 @@ main {
     }
     set_val(TRACE_1, currentState);
     set_val(TRACE_2, detectedWeapon);
-    set_val(TRACE_3, get_rumble(RUMBLE_A));
+    set_val(TRACE_3, avgInterval);
     set_val(TRACE_4, get_rumble(RUMBLE_B));
 }
 
@@ -441,50 +444,55 @@ function handlePlayingState() {
         combo_run(DoubleJump);
     }
 
-    // Weapon Detection
+    // Weapon Detection (valley detection — works for auto and semi-auto)
     if (toggleWeaponDetection) {
         timeSinceLastPulse += get_rtime();
+        currentRumble = get_rumble(RUMBLE_B);
 
-        if (get_rumble(RUMBLE_B) > RUMBLE_THRESHOLD) {
-            if (!rumbleWasActive) {
-                // Rising edge detected
-                rumbleWasActive = TRUE;
-
-                if (hasPreviousPulse) {
-                    totalInterval += timeSinceLastPulse;
-                    sampleCount += 1;
-
-                    if (sampleCount >= SAMPLES_NEEDED) {
-                        avgInterval = totalInterval / sampleCount;
-                        prevDetectedWeapon = detectedWeapon;
-                        detectedWeapon = identifyWeapon(avgInterval);
-
-                        if (detectedWeapon != prevDetectedWeapon) {
-                            setWeaponLedColor(detectedWeapon);
-                            resetDisplay();
-                        }
-
-                        // Reset for next batch
-                        sampleCount = 0;
-                        totalInterval = 0;
-                    }
-                }
-
-                hasPreviousPulse = TRUE;
-                timeSinceLastPulse = 0;
-            }
-        } else {
-            rumbleWasActive = FALSE;
+        // Detect falling direction
+        if (prevRumble - currentRumble >= RUMBLE_CHANGE_MIN) {
+            rumbleFalling = TRUE;
         }
+
+        // Detect valley: was falling, now rising above threshold
+        if (rumbleFalling && currentRumble - prevRumble >= RUMBLE_CHANGE_MIN && currentRumble > RUMBLE_THRESHOLD) {
+            rumbleFalling = FALSE;
+
+            if (hasPreviousPulse) {
+                totalInterval += timeSinceLastPulse;
+                sampleCount += 1;
+
+                if (sampleCount >= SAMPLES_NEEDED) {
+                    avgInterval = totalInterval / sampleCount;
+                    prevDetectedWeapon = detectedWeapon;
+                    detectedWeapon = identifyWeapon(avgInterval);
+
+                    if (detectedWeapon != prevDetectedWeapon) {
+                        setWeaponLedColor(detectedWeapon);
+                        resetDisplay();
+                    }
+
+                    sampleCount = 0;
+                    totalInterval = 0;
+                }
+            }
+
+            hasPreviousPulse = TRUE;
+            timeSinceLastPulse = 0;
+        }
+
+        prevRumble = currentRumble;
 
         // Reset after timeout (stopped firing)
         if (timeSinceLastPulse > DETECTION_RESET_TIMEOUT) {
-            if (detectedWeapon != 0) {
+            if (detectedWeapon != 0 || hasPreviousPulse) {
                 detectedWeapon = 0;
                 hasPreviousPulse = FALSE;
                 sampleCount = 0;
                 totalInterval = 0;
                 avgInterval = 0;
+                rumbleFalling = FALSE;
+                prevRumble = 0;
                 currentLedColor = Pink;
                 SetLEDColor(currentLedColor);
                 resetDisplay();
