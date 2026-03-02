@@ -364,8 +364,8 @@ main {
     }
     set_val(TRACE_1, currentState);
     set_val(TRACE_2, detectedWeapon);
-    set_val(TRACE_3, avgInterval);
-    set_val(TRACE_4, get_rumble(RUMBLE_RT));
+    set_val(TRACE_3, get_rumble(RUMBLE_A));
+    set_val(TRACE_4, get_rumble(RUMBLE_B));
 }
 
 // ============================================================================
@@ -445,7 +445,7 @@ function handlePlayingState() {
     if (toggleWeaponDetection) {
         timeSinceLastPulse += get_rtime();
 
-        if (get_rumble(RUMBLE_RT) > RUMBLE_THRESHOLD) {
+        if (get_rumble(RUMBLE_B) > RUMBLE_THRESHOLD) {
             if (!rumbleWasActive) {
                 // Rising edge detected
                 rumbleWasActive = TRUE;
