@@ -311,6 +311,9 @@ main {
         }
     }
     set_val(TRACE_1, currentState);
+    set_val(TRACE_2, JUMP_BTN);
+    set_val(TRACE_3, settings[JumpButtonEnum]);
+    set_val(TRACE_4, toggleDoubleJump);
 }
 
 // ============================================================================
@@ -599,6 +602,8 @@ function displaySubMenuScreen() {
 
 fcombo DoubleJump {
     wait(settings[DelayEnum]);
+    set_val(JUMP_BTN, 0);
+    wait(40);
     set_val(JUMP_BTN, 100);
     wait(50);
     set_val(JUMP_BTN, 0);
